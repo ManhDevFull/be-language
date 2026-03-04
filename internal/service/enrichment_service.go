@@ -77,6 +77,8 @@ func (s *EnrichmentService) Resolve(ctx context.Context, input string) (model.En
 		return model.EnrichmentResult{}, false, errors.New("gia tri cot nhap khong duoc de trong")
 	}
 
+	dictionaryTerm, singleWord := dictionaryLookupTerm(cleanInput)
+
 	cacheToken := strings.ToLower(cleanInput)
 	if cached, ok := s.getFromCache(cacheToken); ok {
 		return cached, true, nil
@@ -95,12 +97,15 @@ func (s *EnrichmentService) Resolve(ctx context.Context, input string) (model.En
 	)
 
 	var waitGroup sync.WaitGroup
-	waitGroup.Add(3)
+	waitGroup.Add(2)
 
-	go func() {
-		defer waitGroup.Done()
-		dictData, dictErr = s.fetchDictionary(ctx, cleanInput)
-	}()
+	if singleWord {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			dictData, dictErr = s.fetchDictionary(ctx, dictionaryTerm)
+		}()
+	}
 
 	go func() {
 		defer waitGroup.Done()
@@ -114,8 +119,19 @@ func (s *EnrichmentService) Resolve(ctx context.Context, input string) (model.En
 
 	waitGroup.Wait()
 
-	if dictErr != nil && vietnameseErr != nil && russianErr != nil {
+	allProvidersFailed := vietnameseErr != nil && russianErr != nil && (!singleWord || dictErr != nil)
+	if allProvidersFailed {
 		return model.EnrichmentResult{}, false, errNoUsableData
+	}
+
+	partOfSpeechFallback := "chưa rõ"
+	if !singleWord {
+		partOfSpeechFallback = "cụm từ/câu"
+	}
+
+	meaning := firstNonEmpty(vietnamese, dictData.definition, "chưa có nghĩa")
+	if !singleWord {
+		meaning = firstNonEmpty(vietnamese, "chưa có nghĩa")
 	}
 
 	result := model.EnrichmentResult{
@@ -124,8 +140,8 @@ func (s *EnrichmentService) Resolve(ctx context.Context, input string) (model.En
 		EnglishPhonetic: dictData.phonetic,
 		RussianWord:     russian,
 		RussianPhonetic: transliterateRussian(russian),
-		PartOfSpeech:    firstNonEmpty(dictData.partOfWord, "chưa rõ"),
-		Meaning:         firstNonEmpty(vietnamese, dictData.definition, "chưa có nghĩa"),
+		PartOfSpeech:    firstNonEmpty(dictData.partOfWord, partOfSpeechFallback),
+		Meaning:         meaning,
 	}
 
 	s.saveToCache(cacheToken, result)
@@ -191,7 +207,7 @@ func (s *EnrichmentService) fetchDictionary(ctx context.Context, term string) (d
 func (s *EnrichmentService) translate(ctx context.Context, term, targetLang string) (string, error) {
 	query := url.Values{}
 	query.Set("client", "gtx")
-	query.Set("sl", "en")
+	query.Set("sl", "auto")
 	query.Set("tl", targetLang)
 	query.Set("dt", "t")
 	query.Set("q", term)
@@ -351,4 +367,26 @@ func capitalizeASCII(value string) string {
 	}
 
 	return strings.ToUpper(value[:1]) + value[1:]
+}
+
+func dictionaryLookupTerm(input string) (string, bool) {
+	fields := strings.Fields(input)
+	if len(fields) != 1 {
+		return "", false
+	}
+
+	term := strings.Trim(fields[0], ".,!?;:\"()[]{}")
+	if term == "" {
+		return "", false
+	}
+
+	for _, character := range term {
+		if unicode.IsLetter(character) || unicode.IsDigit(character) || character == '-' || character == '\'' {
+			continue
+		}
+
+		return "", false
+	}
+
+	return term, true
 }

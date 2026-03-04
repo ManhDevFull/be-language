@@ -50,3 +50,30 @@ func TestEnrichmentServiceCacheEviction(t *testing.T) {
 		t.Fatalf("expected key three to remain in cache")
 	}
 }
+
+func TestDictionaryLookupTerm(t *testing.T) {
+	testCases := []struct {
+		input    string
+		expected string
+		ok       bool
+	}{
+		{input: "language", expected: "language", ok: true},
+		{input: "hello,", expected: "hello", ok: true},
+		{input: "don't", expected: "don't", ok: true},
+		{input: "good-bye", expected: "good-bye", ok: true},
+		{input: "how are you", expected: "", ok: false},
+		{input: "xin chào bạn", expected: "", ok: false},
+		{input: "hello@world", expected: "", ok: false},
+	}
+
+	for _, testCase := range testCases {
+		output, ok := dictionaryLookupTerm(testCase.input)
+		if ok != testCase.ok {
+			t.Fatalf("input %q expected ok=%v, got %v", testCase.input, testCase.ok, ok)
+		}
+
+		if output != testCase.expected {
+			t.Fatalf("input %q expected output %q, got %q", testCase.input, testCase.expected, output)
+		}
+	}
+}
